@@ -18,7 +18,10 @@ package io.agentscope.harness.agent.bus;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.harness.agent.filesystem.local.LocalFilesystem;
+import io.agentscope.harness.agent.filesystem.model.FileInfo;
+import io.agentscope.harness.agent.filesystem.model.LsResult;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
@@ -99,6 +102,50 @@ class WorkspaceAsyncToolRegistryTest {
 
         List<AsyncToolRecord> stale = registry.findStale("s1", Duration.ofMinutes(5)).block();
         assertTrue(stale.isEmpty());
+    }
+
+
+    @Test
+    void updatesRecordWhenRemoteListingAddsTrailingSlash() {
+        LocalFilesystem remoteLikeFs =
+                new LocalFilesystem(tempDir, true, 10) {
+                    @Override
+                    public LsResult ls(RuntimeContext context, String path) {
+                        LsResult result = super.ls(context, path);
+                        if (!"/async-tools".equals(path) || !result.isSuccess()) {
+                            return result;
+                        }
+                        return LsResult.success(
+                                result.entries().stream()
+                                        .map(
+                                                entry ->
+                                                        entry.isDirectory()
+                                                                ? new FileInfo(
+                                                                        entry.path() + "/",
+                                                                        true,
+                                                                        entry.size(),
+                                                                        entry.modifiedAt())
+                                                                : entry)
+                                        .toList());
+                    }
+                };
+        WorkspaceAsyncToolRegistry remoteLikeRegistry =
+                new WorkspaceAsyncToolRegistry(remoteLikeFs, "/async-tools");
+        remoteLikeRegistry
+                .register(
+                        new AsyncToolRecord(
+                                "r1",
+                                "s1",
+                                "tool",
+                                "tc1",
+                                AsyncToolRecord.RUNNING,
+                                Instant.now().minus(Duration.ofMinutes(10))))
+                .block();
+
+        remoteLikeRegistry.complete("r1", "done").block();
+
+        assertTrue(
+                remoteLikeRegistry.findStale("s1", Duration.ofMinutes(5)).block().isEmpty());
     }
 
     @Test
